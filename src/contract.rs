@@ -1,11 +1,13 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{
+    to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Order, Response, StdError, StdResult,
+};
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, GamesListResponse, InstantiateMsg, QueryMsg};
+use crate::state::{Game, GameMove, GameResult, State, GAME, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:rps-dapp";
@@ -16,7 +18,7 @@ pub fn instantiate(
     deps: DepsMut,
     _env: Env,
     info: MessageInfo,
-    msg: InstantiateMsg,
+    _msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
     let state = State {
         owner: info.sender.clone(),
@@ -37,19 +39,37 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        /* ExecuteMsg::Increment {} => try_increment(deps),
-        ExecuteMsg::Reset { count } => try_reset(deps, info, count), */
-        ExecuteMsg::StartGame { opponent } => try_start_game(deps, opponent),
+        ExecuteMsg::StartGame {
+            opponent,
+            host_move,
+        } => try_start_game(deps, info, opponent, host_move),
     }
 }
 
-pub fn try_start_game(deps: DepsMut, opponent: Addr) -> Result<Response, ContractError> {
+pub fn try_start_game(
+    deps: DepsMut,
+    info: MessageInfo,
+    opponent: Addr,
+    host_move: GameMove,
+) -> Result<Response, ContractError> {
     let val_addr = deps.api.addr_validate(opponent.as_str())?;
 
-    /* STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        state.count += 1;
-        Ok(state)
-    })?; */
+    let game = GAME.may_load(deps.storage, (&info.sender, &val_addr))?;
+
+    match game {
+        Some(_) => return Err(ContractError::OnlyOneGameAtATime {}),
+        None => {
+            let game_info = Game {
+                host: info.sender.clone(),
+                opponent: val_addr.clone(),
+                host_move: host_move,
+                opp_move: None,
+                result: None,
+            };
+
+            GAME.save(deps.storage, (&info.sender, &val_addr), &game_info)?;
+        }
+    }
 
     Ok(Response::new().add_attribute("method", "try_start_game"))
 }
@@ -78,6 +98,9 @@ pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Respons
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetOwner {} => to_binary(&query_owner(deps)?),
+        QueryMsg::GetGamesByHost {} => to_binary(&query_game_by_host(deps)?),
+        QueryMsg::GetGamesByOpponent { opponent } => to_binary(&query_game_by_opp(deps, opponent)?),
+        QueryMsg::GetGame { host, opponent } => to_binary(&query_game(deps, host, opponent)?),
     }
 }
 
@@ -86,10 +109,61 @@ fn query_owner(deps: Deps) -> StdResult<Addr> {
     Ok(Addr::from(state.owner))
 }
 
-/* fn query_count(deps: Deps) -> StdResult<CountResponse> {
+fn query_game(deps: Deps, host: Addr, opponent: Addr) -> StdResult<Game> {
+    let val_host_addr = deps.api.addr_validate(&host.as_str())?;
+    let val_opp_addr = deps.api.addr_validate(&opponent.as_str())?;
+
+    let game = GAME.may_load(deps.storage, (&val_host_addr, &val_opp_addr))?;
+
+    match game {
+        Some(g) => Ok(Game {
+            host: g.host,
+            opponent: g.opponent,
+            host_move: g.host_move,
+            opp_move: g.opp_move,
+            result: g.result,
+        }),
+        None => Err(StdError::generic_err("Game not found")),
+    }
+}
+
+fn query_game_by_host(deps: Deps) -> StdResult<GamesListResponse> {
     let state = STATE.load(deps.storage)?;
-    Ok(CountResponse { count: state.count })
-} */
+
+    let validated_addr = deps.api.addr_validate(&state.owner.as_str())?;
+
+    let mut games_found: Vec<Game> = vec![];
+
+    let games_queried: StdResult<Vec<_>> = GAME
+        .prefix(&validated_addr)
+        .range(deps.storage, None, None, Order::Ascending)
+        .collect();
+
+    for games_queried in &games_queried? {
+        games_found.push(games_queried.1.clone());
+    }
+
+    Ok(GamesListResponse { games: games_found })
+}
+
+fn query_game_by_opp(deps: Deps, opponent: Addr) -> StdResult<GamesListResponse> {
+    let validated_addr = deps.api.addr_validate(&opponent.as_str())?;
+
+    let mut games_found: Vec<Game> = vec![];
+
+    let games_queried: StdResult<Vec<_>> = GAME
+        .range(deps.storage, None, None, Order::Ascending)
+        .collect();
+
+    for games_queried in &games_queried? {
+        if validated_addr == games_queried.1.opponent {
+            games_found.push(games_queried.1.clone());
+        }
+    }
+
+    Ok(GamesListResponse { games: games_found })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn opp_address_valid() {
+    fn query_games_by_host() {
         let mut deps = mock_dependencies(&[]);
         let msg = InstantiateMsg {};
         let info = mock_info("creator", &coins(1000, "earth"));
@@ -120,18 +194,136 @@ mod tests {
         // we can just call .unwrap() to assert this was a success
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // execute start game
+        // execute start game w/ 1st opponent and host move
         let info = mock_info("creator", &coins(2, "token"));
         let msg = ExecuteMsg::StartGame {
-            opponent: Addr::unchecked("other_player"),
+            opponent: Addr::unchecked("first_player"),
+            host_move: GameMove::Rock,
         };
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // query owner
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetOwner {}).unwrap();
-        let value: Addr = from_binary(&res).unwrap();
+        // execute start game w/ 2nd opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("second_player"),
+            host_move: GameMove::Paper,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        assert_eq!(Addr::unchecked("creator"), value);
+        // execute start game w/ 3rd opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("third_player"),
+            host_move: GameMove::Scissors,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query games by host address
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetGamesByHost {}).unwrap();
+
+        let value: GamesListResponse = from_binary(&res).unwrap();
+
+        assert_eq!(3, value.games.len());
+
+        assert_eq!(Addr::unchecked("creator"), value.games[0].host);
+        assert_eq!(Addr::unchecked("first_player"), value.games[0].opponent);
+        assert_eq!(GameMove::Rock, value.games[0].host_move);
+        assert_eq!(None, value.games[0].opp_move);
+        assert_eq!(None, value.games[0].result);
+
+        assert_eq!(Addr::unchecked("creator"), value.games[1].host);
+        assert_eq!(Addr::unchecked("second_player"), value.games[1].opponent);
+        assert_eq!(GameMove::Paper, value.games[1].host_move);
+        assert_eq!(None, value.games[1].opp_move);
+        assert_eq!(None, value.games[1].result);
+    }
+
+    #[test]
+    fn query_games_by_opp() {
+        let mut deps = mock_dependencies(&[]);
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute start game w/ opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("other_player"),
+            host_move: GameMove::Rock,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query games by opponent address
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetGamesByOpponent {
+                opponent: Addr::unchecked("other_player"),
+            },
+        )
+        .unwrap();
+
+        let value: GamesListResponse = from_binary(&res).unwrap();
+
+        assert_eq!(Addr::unchecked("creator"), value.games[0].host);
+        assert_eq!(Addr::unchecked("other_player"), value.games[0].opponent);
+        assert_eq!(GameMove::Rock, value.games[0].host_move);
+        assert_eq!(None, value.games[0].opp_move);
+        assert_eq!(None, value.games[0].result);
+    }
+
+    #[test]
+    fn query_game_by_opp_and_host() {
+        let mut deps = mock_dependencies(&[]);
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute start game w/ opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("other_player"),
+            host_move: GameMove::Rock,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query games by host and opponent addresses - fail
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetGame {
+                host: Addr::unchecked("creator"),
+                opponent: Addr::unchecked("not_a_real_player"),
+            },
+        );
+
+        match res {
+            Err(_std_error) => {}
+            _ => panic!("Must return Game not found error"),
+        }
+
+        // query games by host and opponent addresses - success
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetGame {
+                host: Addr::unchecked("creator"),
+                opponent: Addr::unchecked("other_player"),
+            },
+        )
+        .unwrap();
+
+        let value: Game = from_binary(&res).unwrap();
+
+        assert_eq!(Addr::unchecked("creator"), value.host);
+        assert_eq!(Addr::unchecked("other_player"), value.opponent);
+        assert_eq!(GameMove::Rock, value.host_move);
+        assert_eq!(None, value.opp_move);
+        assert_eq!(None, value.result);
     }
 
     /* #[test]
