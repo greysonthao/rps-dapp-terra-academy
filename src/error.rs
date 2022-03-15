@@ -1,4 +1,5 @@
 use cosmwasm_std::StdError;
+use cw_controllers::AdminError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -8,6 +9,9 @@ pub enum ContractError {
 
     #[error("Unauthorized")]
     Unauthorized {},
+
+    #[error("No Admin Found")]
+    Admin(#[from] AdminError),
 
     #[error("Only One Game can be Played with the Same Opponent At One Time")]
     OnlyOneGameAtATime {},

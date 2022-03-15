@@ -3,11 +3,12 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     to_binary, Addr, Binary, Deps, DepsMut, Env, MessageInfo, Order, Response, StdError, StdResult,
 };
+use cw0::maybe_addr;
 use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, GamesListResponse, InstantiateMsg, QueryMsg};
-use crate::state::{Game, GameMove, GameResult, State, GAME, STATE};
+use crate::state::{Game, GameMove, State, ADMIN, GAME, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:rps-dapp";
@@ -15,7 +16,7 @@ const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
-    deps: DepsMut,
+    mut deps: DepsMut,
     _env: Env,
     info: MessageInfo,
     _msg: InstantiateMsg,
@@ -23,12 +24,19 @@ pub fn instantiate(
     let state = State {
         owner: info.sender.clone(),
     };
+
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
+
+    let admin_address = maybe_addr(deps.api, Some(info.sender.to_string()))?;
+
+    ADMIN.set(deps.branch(), admin_address)?;
+
     STATE.save(deps.storage, &state)?;
 
     Ok(Response::new()
         .add_attribute("method", "instantiate")
-        .add_attribute("owner", info.sender))
+        .add_attribute("owner", &info.sender)
+        .add_attribute("admin", &info.sender))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -43,7 +51,22 @@ pub fn execute(
             opponent,
             host_move,
         } => try_start_game(deps, info, opponent, host_move),
+        ExecuteMsg::UpdateAdmin { admin } =>
+        //TO DO
+        {
+            try_admin_update(deps, info, admin)
+        }
     }
+}
+
+pub fn try_admin_update(
+    deps: DepsMut,
+    info: MessageInfo,
+    admin: Addr,
+) -> Result<Response, ContractError> {
+    let val_addr = maybe_addr(deps.api, Some(admin.to_string()))?;
+
+    return Ok(ADMIN.execute_update_admin(deps, info, val_addr)?);
 }
 
 pub fn try_start_game(
@@ -74,26 +97,6 @@ pub fn try_start_game(
     Ok(Response::new().add_attribute("method", "try_start_game"))
 }
 
-/* pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        state.count += 1;
-        Ok(state)
-    })?;
-
-    Ok(Response::new().add_attribute("method", "try_increment"))
-}
-
-pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        if info.sender != state.owner {
-            return Err(ContractError::Unauthorized {});
-        }
-        state.count = count;
-        Ok(state)
-    })?;
-    Ok(Response::new().add_attribute("method", "reset"))
-} */
-
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -101,6 +104,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetGamesByHost {} => to_binary(&query_game_by_host(deps)?),
         QueryMsg::GetGamesByOpponent { opponent } => to_binary(&query_game_by_opp(deps, opponent)?),
         QueryMsg::GetGame { host, opponent } => to_binary(&query_game(deps, host, opponent)?),
+        QueryMsg::GetAdmin {} => to_binary(&query_admin(deps)?),
     }
 }
 
@@ -164,6 +168,10 @@ fn query_game_by_opp(deps: Deps, opponent: Addr) -> StdResult<GamesListResponse>
     Ok(GamesListResponse { games: games_found })
 }
 
+fn query_admin(deps: Deps) -> StdResult<Option<Addr>> {
+    Ok(ADMIN.get(deps)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,7 +180,7 @@ mod tests {
 
     #[test]
     fn proper_initialization() {
-        let mut deps = mock_dependencies(&[]);
+        let mut deps = mock_dependencies();
         let msg = InstantiateMsg {};
         let info = mock_info("creator", &coins(1000, "earth"));
 
@@ -187,7 +195,7 @@ mod tests {
 
     #[test]
     fn query_games_by_host() {
-        let mut deps = mock_dependencies(&[]);
+        let mut deps = mock_dependencies();
         let msg = InstantiateMsg {};
         let info = mock_info("creator", &coins(1000, "earth"));
 
@@ -240,7 +248,7 @@ mod tests {
 
     #[test]
     fn query_games_by_opp() {
-        let mut deps = mock_dependencies(&[]);
+        let mut deps = mock_dependencies();
         let msg = InstantiateMsg {};
         let info = mock_info("creator", &coins(1000, "earth"));
 
@@ -276,7 +284,7 @@ mod tests {
 
     #[test]
     fn query_game_by_opp_and_host() {
-        let mut deps = mock_dependencies(&[]);
+        let mut deps = mock_dependencies();
         let msg = InstantiateMsg {};
         let info = mock_info("creator", &coins(1000, "earth"));
 
@@ -324,6 +332,21 @@ mod tests {
         assert_eq!(GameMove::Rock, value.host_move);
         assert_eq!(None, value.opp_move);
         assert_eq!(None, value.result);
+    }
+
+    #[test]
+    fn get_admin() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator_man", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query admin success
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetAdmin {}).unwrap();
+        let value: Addr = from_binary(&res).unwrap();
+        assert_eq!(Addr::unchecked("creator_man"), value);
     }
 
     /* #[test]

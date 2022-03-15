@@ -10,9 +10,8 @@ pub struct InstantiateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    /* Increment {},
-    Reset { count: i32 }, */
     StartGame { opponent: Addr, host_move: GameMove },
+    UpdateAdmin { admin: Addr },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -22,13 +21,8 @@ pub enum QueryMsg {
     GetGamesByHost {},
     GetOwner {},
     GetGame { host: Addr, opponent: Addr },
+    GetAdmin {},
 }
-
-// We define a custom struct for each query response
-/* #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct CountResponse {
-    pub count: i32,
-} */
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct GamesListResponse {
