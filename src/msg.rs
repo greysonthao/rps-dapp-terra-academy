@@ -12,6 +12,8 @@ pub struct InstantiateMsg {}
 pub enum ExecuteMsg {
     StartGame { opponent: Addr, host_move: GameMove },
     UpdateAdmin { admin: Addr },
+    AddToBlacklist { address: Addr },
+    RemoveFromBlacklist { address: Addr },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

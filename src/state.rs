@@ -1,7 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cw_controllers::Admin;
+use cw_controllers::{Admin, Hooks};
 
 use cosmwasm_std::Addr;
 use cw_storage_plus::{Item, Map};
@@ -14,6 +14,7 @@ pub struct State {
 pub const STATE: Item<State> = Item::new("state");
 pub const GAME: Map<(&Addr, &Addr), Game> = Map::new("game");
 pub const ADMIN: Admin = Admin::new("admin");
+pub const HOOKS: Hooks = Hooks::new("cw4-hooks");
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct Game {

@@ -8,7 +8,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, GamesListResponse, InstantiateMsg, QueryMsg};
-use crate::state::{Game, GameMove, State, ADMIN, GAME, STATE};
+use crate::state::{Game, GameMove, State, ADMIN, GAME, HOOKS, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:rps-dapp";
@@ -51,10 +51,14 @@ pub fn execute(
             opponent,
             host_move,
         } => try_start_game(deps, info, opponent, host_move),
-        ExecuteMsg::UpdateAdmin { admin } =>
-        //TO DO
-        {
-            try_admin_update(deps, info, admin)
+        ExecuteMsg::UpdateAdmin { admin } => try_admin_update(deps, info, admin),
+        ExecuteMsg::AddToBlacklist { address } => {
+            let valid_addr = deps.api.addr_validate(address.as_str())?;
+            Ok(HOOKS.execute_add_hook(&ADMIN, deps, info, valid_addr)?)
+        }
+        ExecuteMsg::RemoveFromBlacklist { address } => {
+            let valid_addr = deps.api.addr_validate(address.as_str())?;
+            Ok(HOOKS.execute_remove_hook(&ADMIN, deps, info, valid_addr)?)
         }
     }
 }
@@ -75,6 +79,14 @@ pub fn try_start_game(
     opponent: Addr,
     host_move: GameMove,
 ) -> Result<Response, ContractError> {
+    let hooks = HOOKS.query_hooks(deps.as_ref())?.hooks;
+
+    for blacklisted_address in hooks.iter() {
+        if blacklisted_address == &info.sender {
+            return Err(ContractError::HostAddressBlacklisted {});
+        }
+    }
+
     let val_addr = deps.api.addr_validate(opponent.as_str())?;
 
     let game = GAME.may_load(deps.storage, (&info.sender, &val_addr))?;
@@ -374,6 +386,36 @@ mod tests {
         let res = query(deps.as_ref(), mock_env(), QueryMsg::GetAdmin {}).unwrap();
         let value: Addr = from_binary(&res).unwrap();
         assert_eq!(Addr::unchecked("updated_man"), value);
+    }
+
+    #[test]
+    fn host_blacklist() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute add to blacklist
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::AddToBlacklist {
+            address: Addr::unchecked("host_black_listed"),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute start game w/ opponent and host move
+        let info = mock_info("host_black_listed", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("other_player"),
+            host_move: GameMove::Rock,
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, msg);
+
+        match res {
+            Err(ContractError::HostAddressBlacklisted {}) => {}
+            _ => panic!("Must return BlackListedAddress error"),
+        }
     }
 
     /* #[test]
