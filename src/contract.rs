@@ -349,6 +349,33 @@ mod tests {
         assert_eq!(Addr::unchecked("creator_man"), value);
     }
 
+    #[test]
+    fn update_admin() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator_man", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query 1st admin success
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetAdmin {}).unwrap();
+        let value: Addr = from_binary(&res).unwrap();
+        assert_eq!(Addr::unchecked("creator_man"), value);
+
+        // execute admin update
+        let info = mock_info("creator_man", &coins(2, "token"));
+        let msg = ExecuteMsg::UpdateAdmin {
+            admin: Addr::unchecked("updated_man"),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query 2nd admin success
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetAdmin {}).unwrap();
+        let value: Addr = from_binary(&res).unwrap();
+        assert_eq!(Addr::unchecked("updated_man"), value);
+    }
+
     /* #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies(&[]);
