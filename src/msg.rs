@@ -20,7 +20,7 @@ pub enum ExecuteMsg {
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
     GetGamesByOpponent { opponent: Addr },
-    GetGamesByHost {},
+    GetGamesByHost { address: Addr },
     GetOwner {},
     GetGame { host: Addr, opponent: Addr },
     GetAdmin {},

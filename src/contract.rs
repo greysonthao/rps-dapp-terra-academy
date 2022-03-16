@@ -113,7 +113,7 @@ pub fn try_start_game(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetOwner {} => to_binary(&query_owner(deps)?),
-        QueryMsg::GetGamesByHost {} => to_binary(&query_game_by_host(deps)?),
+        QueryMsg::GetGamesByHost { address } => to_binary(&query_game_by_host(deps, address)?),
         QueryMsg::GetGamesByOpponent { opponent } => to_binary(&query_game_by_opp(deps, opponent)?),
         QueryMsg::GetGame { host, opponent } => to_binary(&query_game(deps, host, opponent)?),
         QueryMsg::GetAdmin {} => to_binary(&query_admin(deps)?),
@@ -143,10 +143,8 @@ fn query_game(deps: Deps, host: Addr, opponent: Addr) -> StdResult<Game> {
     }
 }
 
-fn query_game_by_host(deps: Deps) -> StdResult<GamesListResponse> {
-    let state = STATE.load(deps.storage)?;
-
-    let validated_addr = deps.api.addr_validate(&state.owner.as_str())?;
+fn query_game_by_host(deps: Deps, address: Addr) -> StdResult<GamesListResponse> {
+    let validated_addr = deps.api.addr_validate(&address.as_str())?;
 
     let mut games_found: Vec<Game> = vec![];
 
@@ -239,7 +237,14 @@ mod tests {
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // query games by host address
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetGamesByHost {}).unwrap();
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetGamesByHost {
+                address: Addr::unchecked("creator"),
+            },
+        )
+        .unwrap();
 
         let value: GamesListResponse = from_binary(&res).unwrap();
 
@@ -416,6 +421,41 @@ mod tests {
             Err(ContractError::HostAddressBlacklisted {}) => {}
             _ => panic!("Must return BlackListedAddress error"),
         }
+
+        // execute remove from blacklist
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::RemoveFromBlacklist {
+            address: Addr::unchecked("host_black_listed"),
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute start game w/ opponent and host move
+        let info = mock_info("host_black_listed", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("other_player"),
+            host_move: GameMove::Rock,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // query games by host address
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetGamesByHost {
+                address: Addr::unchecked("host_black_listed"),
+            },
+        )
+        .unwrap();
+
+        let value: GamesListResponse = from_binary(&res).unwrap();
+
+        assert_eq!(1, value.games.len());
+
+        assert_eq!(Addr::unchecked("host_black_listed"), value.games[0].host);
+        assert_eq!(Addr::unchecked("other_player"), value.games[0].opponent);
+        assert_eq!(GameMove::Rock, value.games[0].host_move);
+        assert_eq!(None, value.games[0].opp_move);
+        assert_eq!(None, value.games[0].result);
     }
 
     /* #[test]
