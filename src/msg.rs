@@ -10,10 +10,24 @@ pub struct InstantiateMsg {}
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    StartGame { opponent: Addr, host_move: GameMove },
-    UpdateAdmin { admin: Addr },
-    AddToBlacklist { address: Addr },
-    RemoveFromBlacklist { address: Addr },
+    StartGame {
+        opponent: Addr,
+        host_move: GameMove,
+    },
+    UpdateAdmin {
+        admin: Addr,
+    },
+    AddToBlacklist {
+        address: Addr,
+    },
+    RemoveFromBlacklist {
+        address: Addr,
+    },
+    Respond {
+        host: Addr,
+        opponent: Addr,
+        opp_move: GameMove,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

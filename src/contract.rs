@@ -8,7 +8,7 @@ use cw2::set_contract_version;
 
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, GamesListResponse, InstantiateMsg, QueryMsg};
-use crate::state::{Game, GameMove, State, ADMIN, GAME, HOOKS, STATE};
+use crate::state::{Game, GameMove, GameResult, State, ADMIN, GAME, HOOKS, STATE};
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:rps-dapp";
@@ -60,6 +60,11 @@ pub fn execute(
             let valid_addr = deps.api.addr_validate(address.as_str())?;
             Ok(HOOKS.execute_remove_hook(&ADMIN, deps, info, valid_addr)?)
         }
+        ExecuteMsg::Respond {
+            host,
+            opponent,
+            opp_move,
+        } => try_response(deps, info, host, opponent, opp_move),
     }
 }
 
@@ -107,6 +112,76 @@ pub fn try_start_game(
     }
 
     Ok(Response::new().add_attribute("method", "try_start_game"))
+}
+
+fn try_response(
+    deps: DepsMut,
+    info: MessageInfo,
+    host: Addr,
+    opponent: Addr,
+    opp_move: GameMove,
+) -> Result<Response, ContractError> {
+    if info.sender != opponent {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut game_found = query_game(deps.as_ref(), host.clone(), opponent.clone())?;
+
+    game_found.opp_move = Some(opp_move);
+
+    if game_found.host_move == GameMove::Rock && opp_move == GameMove::Scissors
+        || game_found.host_move == GameMove::Paper && opp_move == GameMove::Rock
+        || game_found.host_move == GameMove::Scissors && opp_move == GameMove::Paper
+    {
+        game_found.result = Some(GameResult::HostWins);
+    } else if game_found.host_move == opp_move {
+        game_found.result = Some(GameResult::Tie);
+    } else {
+        game_found.result = Some(GameResult::OpponentWins);
+    };
+
+    let game_result = game_found.result.clone();
+
+    let update_game = |game: Option<Game>| -> Result<Game, ContractError> {
+        match game {
+            Some(_) => {
+                let game = Game {
+                    host: game_found.host,
+                    opponent: game_found.opponent,
+                    host_move: game_found.host_move,
+                    opp_move: game_found.opp_move,
+                    result: game_found.result.clone(),
+                };
+                return Ok(game);
+            }
+            None => {
+                return Err(ContractError::NoGameFound {});
+            }
+        }
+    };
+
+    GAME.update(deps.storage, (&host, &opponent), update_game)?;
+
+    let full = GAME.may_load(deps.storage, (&host, &opponent));
+
+    println!("Game data BEFORE removing it from state {:?}", full);
+
+    GAME.remove(deps.storage, (&host.clone(), &opponent.clone()));
+
+    let empty = GAME.may_load(deps.storage, (&host, &opponent));
+
+    println!("Game data AFTER removing it from state {:?}", empty);
+
+    let result_string = match game_result {
+        Some(GameResult::HostWins) => "Host Won",
+        Some(GameResult::OpponentWins) => "Opponent Won",
+        Some(GameResult::Tie) => "Tie",
+        None => "None",
+    };
+
+    Ok(Response::new()
+        .add_attribute("method", "response")
+        .add_attribute("result", result_string))
 }
 
 #[cfg_attr(not(feature = "library"), entry_point)]
@@ -458,67 +533,114 @@ mod tests {
         assert_eq!(None, value.games[0].result);
     }
 
-    /* #[test]
-    fn proper_initialization() {
-        let mut deps = mock_dependencies(&[]);
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(1000, "earth"));
-
-        // we can just call .unwrap() to assert this was a success
-        let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-        assert_eq!(0, res.messages.len());
-
-        // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
-    }
-
     #[test]
-    fn increment() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+    fn full_game_tie() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
+        // execute start game w/ 1st opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("first_player"),
+            host_move: GameMove::Rock,
+        };
         let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
+        // execute try response from non-opponent - should end with error
+        let info = mock_info("second_player", &coins(2, "token"));
+        let msg = ExecuteMsg::Respond {
+            host: Addr::unchecked("creator"),
+            opponent: Addr::unchecked("first_player"),
+            opp_move: GameMove::Rock,
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, msg);
+
+        // should error
+        match res {
+            Err(ContractError::Unauthorized {}) => {}
+            _ => panic!("Must return Unauthorized error"),
+        }
+
+        // execute try response from opponent - should be success
+        let info = mock_info("first_player", &coins(2, "token"));
+        let msg = ExecuteMsg::Respond {
+            host: Addr::unchecked("creator"),
+            opponent: Addr::unchecked("first_player"),
+            opp_move: GameMove::Rock,
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        println!("{:?}", res);
+
+        assert_eq!(res.attributes[0].key, "method");
+        assert_eq!(res.attributes[0].value, "response");
+        assert_eq!(res.attributes[1].key, "result");
+        assert_eq!(res.attributes[1].value, "Tie");
     }
 
     #[test]
-    fn reset() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
-
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+    fn full_game_host_wins() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
+        // execute start game w/ 1st opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("first_player"),
+            host_move: GameMove::Rock,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
+        // execute try response from opponent - should be success
+        let info = mock_info("first_player", &coins(2, "token"));
+        let msg = ExecuteMsg::Respond {
+            host: Addr::unchecked("creator"),
+            opponent: Addr::unchecked("first_player"),
+            opp_move: GameMove::Scissors,
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
 
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
-    } */
+        println!("{:?}", res);
+
+        assert_eq!(res.attributes[0].key, "method");
+        assert_eq!(res.attributes[0].value, "response");
+        assert_eq!(res.attributes[1].key, "result");
+        assert_eq!(res.attributes[1].value, "Host Won");
+    }
+
+    #[test]
+    fn full_game_opp_wins() {
+        let mut deps = mock_dependencies();
+        let msg = InstantiateMsg {};
+        let info = mock_info("creator", &coins(1000, "earth"));
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute start game w/ 1st opponent and host move
+        let info = mock_info("creator", &coins(2, "token"));
+        let msg = ExecuteMsg::StartGame {
+            opponent: Addr::unchecked("first_player"),
+            host_move: GameMove::Rock,
+        };
+        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // execute try response from opponent - should be success
+        let info = mock_info("first_player", &coins(2, "token"));
+        let msg = ExecuteMsg::Respond {
+            host: Addr::unchecked("creator"),
+            opponent: Addr::unchecked("first_player"),
+            opp_move: GameMove::Paper,
+        };
+        let res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        println!("{:?}", res);
+
+        assert_eq!(res.attributes[0].key, "method");
+        assert_eq!(res.attributes[0].value, "response");
+        assert_eq!(res.attributes[1].key, "result");
+        assert_eq!(res.attributes[1].value, "Opponent Won");
+    }
 }

@@ -25,7 +25,7 @@ pub struct Game {
     pub result: Option<GameResult>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema, Copy)]
 pub enum GameMove {
     Rock,
     Paper,

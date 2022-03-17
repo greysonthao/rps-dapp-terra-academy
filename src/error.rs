@@ -10,7 +10,7 @@ pub enum ContractError {
     #[error("Unauthorized")]
     Unauthorized {},
 
-    #[error("No Admin Found")]
+    #[error("No admin found")]
     Admin(#[from] AdminError),
 
     #[error("{0}")]
@@ -19,8 +19,11 @@ pub enum ContractError {
     #[error("The host address is blacklisted")]
     HostAddressBlacklisted {},
 
-    #[error("Only One Game can be Played with the Same Opponent At One Time")]
+    #[error("Only one game can be played with the same opponent at one time")]
     OnlyOneGameAtATime {},
+
+    #[error("No game found between the host and the opponent")]
+    NoGameFound {},
     // Add any other custom errors you like here.
     // Look at https://docs.rs/thiserror/1.0.21/thiserror/ for details.
 }
