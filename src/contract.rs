@@ -162,15 +162,7 @@ fn try_response(
 
     GAME.update(deps.storage, (&host, &opponent), update_game)?;
 
-    let full = GAME.may_load(deps.storage, (&host, &opponent));
-
-    println!("Game data BEFORE removing it from state {:?}", full);
-
     GAME.remove(deps.storage, (&host.clone(), &opponent.clone()));
-
-    let empty = GAME.may_load(deps.storage, (&host, &opponent));
-
-    println!("Game data AFTER removing it from state {:?}", empty);
 
     let result_string = match game_result {
         Some(GameResult::HostWins) => "Host Won",
